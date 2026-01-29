@@ -3,140 +3,54 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"kasir-api/database"
+	"kasir-api/handlers"
+	"kasir-api/repositories"
+	"kasir-api/services"
 	"net/http"
-	"strconv"
+	"os"
 	"strings"
+
+	"github.com/spf13/viper"
 )
 
-type Produk struct {
-	ID    int    `json:"id"`
-	Nama  string `json:"nama"`
-	Harga int    `json:"harga"`
-	Stok  int    `json:"stok"`
-}
-
-var produk = []Produk{
-	{ID: 1, Nama: "Indomie Godog", Harga: 3500, Stok: 10},
-	{ID: 2, Nama: "Vit 1000ml", Harga: 3000, Stok: 40},
-	{ID: 3, Nama: "Silver Queen", Harga: 20000, Stok: 5},
-}
-
-func getProdukByID(w http.ResponseWriter, r *http.Request) {
-	idStr := strings.TrimPrefix(r.URL.Path, "/api/produk/")
-	id, err := strconv.Atoi(idStr)
-	if err != nil {
-		http.Error(w, "Invalid Produk ID", http.StatusBadRequest)
-		return
-	}
-
-	for _, p := range produk {
-		if p.ID == id {
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(p)
-			return
-		}
-	}
-
-	http.Error(w, "Produk belum ada", http.StatusNotFound)
-}
-
-func updateProduk(w http.ResponseWriter, r *http.Request) {
-	// get id dari request
-	idStr := strings.TrimPrefix(r.URL.Path, "/api/produk/")
-	// ganti int
-	id, err := strconv.Atoi(idStr)
-	if err != nil {
-		http.Error(w, "Invalid Produk ID", http.StatusBadRequest)
-		return
-	}
-	// get data dari request
-	var updateProduk Produk
-	err = json.NewDecoder(r.Body).Decode(&updateProduk)
-	if err != nil {
-		http.Error(w, "Invalid Request", http.StatusBadRequest)
-		return
-	}
-	// loop produk, cari id yg sesuai dgn data dr request
-	for i := range produk {
-		if produk[i].ID == id {
-			produk[i] = updateProduk
-
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(updateProduk)
-			return
-		}
-	}
-	http.Error(w, "Produk belum ada", http.StatusNotFound)
-}
-
-func deleteProduk(w http.ResponseWriter, r *http.Request) {
-	//get id
-	idStr := strings.TrimPrefix(r.URL.Path, "/api/produk/")
-	//ganti id menjadi int
-	id, err := strconv.Atoi(idStr)
-	if err != nil {
-		http.Error(w, "Invalid Produk ID", http.StatusBadRequest)
-		return
-	}
-	//loop produk, cari id yg sesuai dgn data dr request,
-	for i, p := range produk {
-		if p.ID == id {
-			//bikin slice baru index sebelum dan sesudah index yg dihapus
-			produk = append(produk[:i], produk[i+1:]...)
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]string{
-				"message": "Produk berhasil dihapus",
-			})
-			return
-		}
-	}
-	http.Error(w, "Produk belum ada", http.StatusNotFound)
+type Config struct {
+	Port   string `mapstructure:"PORT"`
+	DBConn string `mapstructure:"DB_CONN"`
 }
 
 func main() {
 
-	//GET localhost:8080/api/produk/{id}
-	//PUT localhost:8080/api/produk/{id}
-	//DELETE localhost:8080/api/produk/{id}
+	// prioritaskan env yang ada di os level
+	viper.AutomaticEnv()
+	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 
-	http.HandleFunc("/api/produk/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "GET" {
-			getProdukByID(w, r)
-		} else if r.Method == "PUT" {
-			updateProduk(w, r)
-		} else if r.Method == "DELETE" {
-			deleteProduk(w, r)
-		}
-	})
+	if _, err := os.Stat(".env"); err == nil {
+		viper.SetConfigFile(".env")
+		_ = viper.ReadInConfig()
+	}
 
-	//GET localhost:8080/api/produk
-	//POST localhost:8080/api/produk
-	http.HandleFunc("/api/produk", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "GET" {
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(produk)
-		} else if r.Method == "POST" {
-			// baca data dari body request
-			var produkBaru Produk
-			err := json.NewDecoder(r.Body).Decode(&produkBaru)
-			if err != nil {
-				http.Error(w, "Invalid Request", http.StatusBadRequest)
-				return
-			}
+	config := Config{
+		Port:   viper.GetString("PORT"),
+		DBConn: viper.GetString("DB_CONN"),
+	}
 
-			produkBaru.ID = len(produk) + 1
-			produk = append(produk, produkBaru)
-			w.WriteHeader(http.StatusCreated)
-			json.NewEncoder(w).Encode(produkBaru)
-		}
+	// 1. Inisialisasi database terlebih dahulu
+	db, err := database.InitDB(config.DBConn)
+	if err != nil {
+		fmt.Println("gagal konek ke database:", err)
+		return
+	}
+	defer db.Close()
 
-	})
+	// 2. Inisialisasi layer-layer aplikasi (Repository -> Service -> Handler)
+	productRepo := repositories.NewProductRepository(db)
+	productService := services.NewProductService(productRepo)
+	productHandler := handlers.NewProductHandler(productService)
 
-	// // localhost:8080/produk
-	// http.HandleFunc("/produk", func(w http.ResponseWriter, r *http.Request) {
-	// 	w.Header().Set("Content-Type", "application/json")
-	// 	json.NewEncoder(w).Encode(produk)
-	// })
+	// 3. Register routes
+	http.HandleFunc("/api/produk", productHandler.HandleProducts)
+	http.HandleFunc("/api/produk/", productHandler.HandleProductByID)
 
 	//  localhost:8080/health
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -147,9 +61,11 @@ func main() {
 		})
 	})
 
-	fmt.Println("Server running di localhost:8080")
-	err := http.ListenAndServe(":8080", nil)
+	// 4. Start server (ini harus paling akhir)
+	addr := "0.0.0.0:" + config.Port
+	fmt.Println("Server running di", addr)
+	err = http.ListenAndServe(addr, nil)
 	if err != nil {
-		fmt.Println("gagal running server")
+		fmt.Println("gagal running server", err)
 	}
 }
