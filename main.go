@@ -35,13 +35,23 @@ func main() {
 		DBConn: viper.GetString("DB_CONN"),
 	}
 
+	// Log config untuk debugging (jangan log password di production)
+	fmt.Println("=== Configuration ===")
+	fmt.Println("PORT:", config.Port)
+	fmt.Println("DB_CONN exists:", config.DBConn != "")
+	fmt.Println("=====================")
+
 	// 1. Inisialisasi database terlebih dahulu
+	fmt.Println("Attempting to connect to database...")
+	fmt.Println("DB_CONN:", config.DBConn) // Log connection string (tanpa password)
+
 	db, err := database.InitDB(config.DBConn)
 	if err != nil {
-		fmt.Println("gagal konek ke database:", err)
-		return
+		fmt.Println("ERROR: Failed to connect to database:", err)
+		panic(err) // Panic agar Railway log error-nya
 	}
 	defer db.Close()
+	fmt.Println("Database connected successfully!")
 
 	// 2. Inisialisasi layer-layer aplikasi (Repository -> Service -> Handler)
 	productRepo := repositories.NewProductRepository(db)
@@ -59,18 +69,37 @@ func main() {
 
 	//  localhost:8080/health
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		// Test database connection
+		err := db.Ping()
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			json.NewEncoder(w).Encode(map[string]string{
+				"message": "Database connection failed",
+				"status":  "ERROR",
+				"error":   err.Error(),
+			})
+			return
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
 			"message": "API Running",
 			"status":  "OK",
+			"database": "connected",
 		})
 	})
 
 	// 4. Start server (ini harus paling akhir)
 	addr := "0.0.0.0:" + config.Port
-	fmt.Println("Server running di", addr)
+	fmt.Println("===========================================")
+	fmt.Println("Server starting on", addr)
+	fmt.Println("Health check: http://" + addr + "/health")
+	fmt.Println("===========================================")
+
 	err = http.ListenAndServe(addr, nil)
 	if err != nil {
-		fmt.Println("gagal running server", err)
+		fmt.Println("ERROR: Failed to start server:", err)
+		panic(err)
 	}
 }
