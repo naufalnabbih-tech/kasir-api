@@ -18,8 +18,8 @@ func NewProductService(repo *repositories.ProductRepository) *ProductService {
 
 // GetAll memanggil repository untuk mengambil semua produk
 // Bisa ditambahkan validasi atau business logic di sini jika diperlukan
-func (s *ProductService) GetAll() ([]models.Product, error) {
-	return s.repo.GetAll()
+func (s *ProductService) GetAll(name string) ([]models.Product, error) {
+	return s.repo.GetAll(name)
 }
 
 // Create memvalidasi dan menyimpan produk baru melalui repository
